@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "resource.h"
 
 // CFrameAnalyzerDlg dialog
 class CFrameAnalyzerDlg : public CDialogEx
@@ -30,7 +31,6 @@ protected:
 	afx_msg void OnPaint();
 	afx_msg HCURSOR OnQueryDragIcon();
 	DECLARE_MESSAGE_MAP()
-<<<<<<< HEAD
 public:
 	// The wizard defined for strings
 	CString m_strHexInput;
@@ -40,6 +40,4 @@ public:
 	CComboBox m_cbProtocol;
 
 	afx_msg void OnBnClickedBtnDecode();
-=======
->>>>>>> d865bb1617f5256c0274ad28a97b4e53c4a1e13b
 };
