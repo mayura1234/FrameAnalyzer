@@ -51,7 +51,19 @@ BOOL CFrameAnalyzerDlg::OnInitDialog()
 	SetIcon(m_hIcon, TRUE);			// Set big icon
 	SetIcon(m_hIcon, FALSE);		// Set small icon
 
-	// TODO: Add extra initialization here
+	// --- PROTOCOL INITIALIZATION ---
+	m_cbProtocol.ResetContent();
+	m_cbProtocol.AddString(_T("Modbus RTU"));
+
+	// Phase 2 / Other protocols
+	/*
+	m_cbProtocol.AddString(_T("IEC 60870-5-104"));
+	m_cbProtocol.AddString(_T("IEC 60870-5-101"));
+	m_cbProtocol.AddString(_T("DNP3"));
+
+	*/
+
+	// Select the first item in our programmatic list
 	m_cbProtocol.SetCurSel(0);
 
 	return TRUE;  // return TRUE  unless you set the focus to a control
@@ -93,6 +105,7 @@ HCURSOR CFrameAnalyzerDlg::OnQueryDragIcon()
 	return static_cast<HCURSOR>(m_hIcon);
 }
 
+//Decode Button 
 void CFrameAnalyzerDlg::OnBnClickedBtnDecode()
 {
 	// TODO: Add your control notification handler code here
@@ -107,17 +120,104 @@ void CFrameAnalyzerDlg::OnBnClickedBtnDecode()
 		return;
 	}
 
-	// 3. Get the selected protocol from the Combo Box
-	CString selectedProtocol;
-	m_cbProtocol.GetWindowText(selectedProtocol);
+	// Convert the text into our byte array
+	std::vector<unsigned char> parsedBytes = ParseHexInput(m_strHexInput);
 
-	// 4. Format a temporary output to prove we grabbed everything
+	// 1. Safety check: A Modbus frame must have at least 4 bytes (Address, Function, CRC, CRC)
+	if (parsedBytes.size() < 4)
+	{
+		m_strOutput = _T("Error: Frame is too short to be valid.");
+		UpdateData(FALSE);
+		return;
+	}
+
+	int totalBytes = parsedBytes.size();
+
+	// 1. Extract the Header
+	unsigned char deviceAddress = parsedBytes[0];
+	unsigned char functionCode = parsedBytes[1];
+
+	CString functionName = _T("Unknown Function");
+	if (functionCode == 3) functionName = _T("Read Holding Registers");
+	else if (functionCode == 6) functionName = _T("Write Single Register");
+
+	// 2. Extract the CRC that was sent in the frame (the last two bytes)
+	// Modbus sends the Low Byte first, then the High Byte
+	unsigned char receivedCrcLow = parsedBytes[totalBytes - 2];
+	unsigned char receivedCrcHigh = parsedBytes[totalBytes - 1];
+
+	// Combine them into a single 16-bit number using bitwise shift (<<) and OR (|)
+	unsigned short receivedCrc = (receivedCrcHigh << 8) | receivedCrcLow;
+
+	// 3. Calculate what the CRC *should* be (exclude the last 2 bytes from the calculation)
+	unsigned short calculatedCrc = CalculateCRC(parsedBytes, totalBytes - 2);
+
+	// 4. Compare them for PASS/FAIL
+	CString crcStatus;
+	if (calculatedCrc == receivedCrc) {
+		crcStatus = _T("PASS");
+	}
+	else {
+		// %04X formats the integer as a 4-character uppercase Hex string
+		crcStatus.Format(_T("FAIL (Expected %04X, got %04X)"), calculatedCrc, receivedCrc);
+	}
+
+	// 5. Output the result
 	CString result;
-	result.Format(_T("Protocol Selected: %s\r\nRaw Input: %s"),
-		selectedProtocol, m_strHexInput);
+	result.Format(_T("Device Address:  %d\r\nFunction Code:   %d  (%s)\r\nCRC Check:       %s"),
+		deviceAddress,
+		functionCode,
+		functionName,
+		crcStatus);
 
 	m_strOutput = result;
-
-	// 5. Push the result back to the multiline output box
 	UpdateData(FALSE);
+
+}
+
+// Parse the input text
+std::vector<unsigned char> CFrameAnalyzerDlg::ParseHexInput(CString input)
+{
+	std::vector<unsigned char> frameBytes;
+
+	// 1. Sanitize the input: strip out spaces and newlines
+	input.Replace(_T(" "), _T(""));
+	input.Replace(_T("\r"), _T(""));
+	input.Replace(_T("\n"), _T(""));
+
+	// 2. Loop through the string two characters at a time
+	for (int i = 0; i < input.GetLength(); i += 2)
+	{
+		// Extract a 2-character chunk
+		CString hexChunk = input.Mid(i, 2);
+
+		// Convert those two hex characters into a real integer (Base 16)
+		long byteValue = _tcstol(hexChunk, nullptr, 16);
+
+		// Cast to an unsigned char (byte) and add it to our array
+		frameBytes.push_back(static_cast<unsigned char>(byteValue));
+	}
+
+	return frameBytes;
+}
+unsigned short CFrameAnalyzerDlg::CalculateCRC(const std::vector<unsigned char>& data, int length)
+{
+	unsigned short crc = 0xFFFF;
+
+	for (int pos = 0; pos < length; pos++)
+	{
+		crc ^= (unsigned short)data[pos];
+
+		for (int i = 8; i != 0; i--)
+		{
+			if ((crc & 0x0001) != 0) {
+				crc >>= 1;
+				crc ^= 0xA001;
+			}
+			else {
+				crc >>= 1;
+			}
+		}
+	}
+	return crc;
 }

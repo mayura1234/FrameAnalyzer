@@ -5,24 +5,25 @@
 #pragma once
 
 #include "resource.h"
+#include <vector>
 
 // CFrameAnalyzerDlg dialog
 class CFrameAnalyzerDlg : public CDialogEx
 {
-// Construction
+	// Construction
 public:
 	CFrameAnalyzerDlg(CWnd* pParent = nullptr);	// standard constructor
 
-// Dialog Data
+	// Dialog Data
 #ifdef AFX_DESIGN_TIME
 	enum { IDD = IDD_FRAMEANALYZER_DIALOG };
 #endif
 
-	protected:
+protected:
 	virtual void DoDataExchange(CDataExchange* pDX);	// DDX/DDV support
 
 
-// Implementation
+	// Implementation
 protected:
 	HICON m_hIcon;
 
@@ -40,4 +41,9 @@ public:
 	CComboBox m_cbProtocol;
 
 	afx_msg void OnBnClickedBtnDecode();
+
+private:
+	std::vector<unsigned char> ParseHexInput(CString input);
+	unsigned short CalculateCRC(const std::vector<unsigned char>& data, int length);
+
 };
