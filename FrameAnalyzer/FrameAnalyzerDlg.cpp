@@ -7,6 +7,7 @@
 #include "FrameAnalyzer.h"
 #include "FrameAnalyzerDlg.h"
 #include "afxdialogex.h"
+#include "resource.h"
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -26,22 +27,16 @@ CFrameAnalyzerDlg::CFrameAnalyzerDlg(CWnd* pParent /*=nullptr*/)
 void CFrameAnalyzerDlg::DoDataExchange(CDataExchange* pDX)
 {
 	CDialogEx::DoDataExchange(pDX);
-<<<<<<< HEAD
 
 	DDX_Text(pDX, IDC_EDIT_HEX_INPUT, m_strHexInput);
 	DDX_Text(pDX, IDC_EDIT_OUTPUT, m_strOutput);
 	DDX_Control(pDX, IDC_COMBO_PROTOCOL, m_cbProtocol);
-=======
->>>>>>> d865bb1617f5256c0274ad28a97b4e53c4a1e13b
 }
 
 BEGIN_MESSAGE_MAP(CFrameAnalyzerDlg, CDialogEx)
 	ON_WM_PAINT()
 	ON_WM_QUERYDRAGICON()
-<<<<<<< HEAD
 	ON_BN_CLICKED(IDC_BTN_DECODE, &CFrameAnalyzerDlg::OnBnClickedBtnDecode)
-=======
->>>>>>> d865bb1617f5256c0274ad28a97b4e53c4a1e13b
 END_MESSAGE_MAP()
 
 
@@ -57,10 +52,7 @@ BOOL CFrameAnalyzerDlg::OnInitDialog()
 	SetIcon(m_hIcon, FALSE);		// Set small icon
 
 	// TODO: Add extra initialization here
-<<<<<<< HEAD
 	m_cbProtocol.SetCurSel(0);
-=======
->>>>>>> d865bb1617f5256c0274ad28a97b4e53c4a1e13b
 
 	return TRUE;  // return TRUE  unless you set the focus to a control
 }
@@ -101,8 +93,6 @@ HCURSOR CFrameAnalyzerDlg::OnQueryDragIcon()
 	return static_cast<HCURSOR>(m_hIcon);
 }
 
-<<<<<<< HEAD
-
 void CFrameAnalyzerDlg::OnBnClickedBtnDecode()
 {
 	// TODO: Add your control notification handler code here
@@ -131,5 +121,3 @@ void CFrameAnalyzerDlg::OnBnClickedBtnDecode()
 	// 5. Push the result back to the multiline output box
 	UpdateData(FALSE);
 }
-=======
->>>>>>> d865bb1617f5256c0274ad28a97b4e53c4a1e13b
