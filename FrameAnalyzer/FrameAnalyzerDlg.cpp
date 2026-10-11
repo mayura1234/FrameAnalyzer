@@ -1,4 +1,4 @@
-
+	
 // FrameAnalyzerDlg.cpp : implementation file
 //
 
@@ -138,8 +138,21 @@ void CFrameAnalyzerDlg::OnBnClickedBtnDecode()
 	unsigned char functionCode = parsedBytes[1];
 
 	CString functionName = _T("Unknown Function");
-	if (functionCode == 3) functionName = _T("Read Holding Registers");
-	else if (functionCode == 6) functionName = _T("Write Single Register");
+	bool isException = false;
+
+	// Check if the highest bit (0x80) is set
+	if (functionCode >= 0x80)
+	{
+		isException = true;
+		// Remove the error flag (subtract 0x80) to find out which function originally failed
+		int originalFunction = functionCode - 0x80;
+		functionName.Format(_T("EXCEPTION on Function %d"), originalFunction);
+	}
+	else
+	{
+		if (functionCode == 3) functionName = _T("Read Holding Registers");
+		else if (functionCode == 6) functionName = _T("Write Single Register");
+	}
 
 	// 2. Extract the CRC that was sent in the frame (the last two bytes)
 	// Modbus sends the Low Byte first, then the High Byte
@@ -162,12 +175,54 @@ void CFrameAnalyzerDlg::OnBnClickedBtnDecode()
 		crcStatus.Format(_T("FAIL (Expected %04X, got %04X)"), calculatedCrc, receivedCrc);
 	}
 
-	// 5. Output the result
+	CString payloadInfo = _T("");
+
+	if (isException && totalBytes >= 5)
+	{
+		// Byte 2 contains the specific error code
+		unsigned char exceptionCode = parsedBytes[2];
+		CString exceptionReason = _T("Unknown Error");
+
+		if (exceptionCode == 1) exceptionReason = _T("Illegal Function (Device doesn't support this)");
+		if (exceptionCode == 2) exceptionReason = _T("Illegal Data Address (Register doesn't exist)");
+		if (exceptionCode == 3) exceptionReason = _T("Illegal Data Value (Bad data format)");
+		if (exceptionCode == 4) exceptionReason = _T("Slave Device Failure (Device is broken)");
+
+		payloadInfo.Format(_T("Error Code:      %d - %s\r\n"), exceptionCode, exceptionReason);
+	}
+	else if (functionCode == 3 && totalBytes == 8)
+	{
+		// Extract Starting Register (Byte 2 is High, Byte 3 is Low)
+		unsigned short startAddress = (parsedBytes[2] << 8) | parsedBytes[3];
+		// Extract Quantity to Read (Byte 4 is High, Byte 5 is Low)
+		unsigned short quantity = (parsedBytes[4] << 8) | parsedBytes[5];
+
+		payloadInfo.Format(_T("Start Register:  %d\r\nQuantity:        %d\r\n"), startAddress, quantity);
+	}
+	else if (functionCode == 6 && totalBytes == 8)
+	{
+		// Extract Target Register (Byte 2 is High, Byte 3 is Low)
+		unsigned short registerAddress = (parsedBytes[2] << 8) | parsedBytes[3];
+
+		// Extract Value to Write (Byte 4 is High, Byte 5 is Low)
+		unsigned short writeValue = (parsedBytes[4] << 8) | parsedBytes[5];
+
+		// We print the value in both decimal and HEX, because engineers 
+		// often use specific hex codes (like 0xFF00) to trigger breakers
+		payloadInfo.Format(_T("Target Register: %d\r\nWrite Value:     %d (0x%04X)\r\n"),
+			registerAddress, writeValue, writeValue);
+	}
+	else
+	{
+		payloadInfo = _T("Payload:         (Hex Data Omitted)\r\n");
+	}
+
 	CString result;
-	result.Format(_T("Device Address:  %d\r\nFunction Code:   %d  (%s)\r\nCRC Check:       %s"),
+	result.Format(_T("Device Address:  %d\r\nFunction Code:   %d  (%s)\r\n%sCRC Check:       %s"),
 		deviceAddress,
 		functionCode,
 		functionName,
+		payloadInfo,
 		crcStatus);
 
 	m_strOutput = result;
