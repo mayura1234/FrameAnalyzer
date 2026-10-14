@@ -183,8 +183,6 @@
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="..\core\ModbusDecoder.h" />
-    <ClInclude Include="..\core\SerialPort.h" />
     <ClInclude Include="FrameAnalyzer.h" />
     <ClInclude Include="FrameAnalyzerDlg.h" />
     <ClInclude Include="framework.h" />
@@ -193,13 +191,6 @@
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\core\ModbusDecoder.cpp" />
-    <ClCompile Include="..\core\SerialPort.cpp">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
     <ClCompile Include="FrameAnalyzer.cpp" />
     <ClCompile Include="FrameAnalyzerDlg.cpp" />
     <ClCompile Include="pch.cpp">

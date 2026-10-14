@@ -42,8 +42,15 @@ public:
 
 	afx_msg void OnBnClickedBtnDecode();
 
+
 private:
-	std::vector<unsigned char> ParseHexInput(CString input);
-	unsigned short CalculateCRC(const std::vector<unsigned char>& data, int length);
+	bool TryParseHexInput(
+		const CString& input,
+		std::vector<unsigned char>& frameBytes,
+		CString& errorMessage);
+
+	unsigned short CalculateCRC(
+		const std::vector<unsigned char>& data,
+		int length);
 
 };

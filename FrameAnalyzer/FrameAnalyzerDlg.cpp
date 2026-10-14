@@ -1,16 +1,72 @@
 	
-// FrameAnalyzerDlg.cpp : implementation file
-//
-
 #include "pch.h"
 #include "framework.h"
 #include "FrameAnalyzer.h"
 #include "FrameAnalyzerDlg.h"
 #include "afxdialogex.h"
 #include "resource.h"
+#include <tchar.h>
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
+
+namespace
+{
+	CString GetModbusFunctionName(unsigned char functionCode)
+	{
+		switch (functionCode)
+		{
+		case 0x01: return _T("Read Coils");
+		case 0x02: return _T("Read Discrete Inputs");
+		case 0x03: return _T("Read Holding Registers");
+		case 0x04: return _T("Read Input Registers");
+		case 0x05: return _T("Write Single Coil");
+		case 0x06: return _T("Write Single Register");
+		case 0x0F: return _T("Write Multiple Coils");
+		case 0x10: return _T("Write Multiple Registers");
+		default:   return _T("Unknown Function");
+		}
+	}
+
+	CString FormatHexBytes(
+		const std::vector<unsigned char>& bytes,
+		int start,
+		int count)
+	{
+		CString result;
+
+		for (int i = 0; i < count; ++i)
+		{
+			CString oneByte;
+			oneByte.Format(_T("%02X"), bytes[start + i]);
+
+			if (!result.IsEmpty())
+				result += _T(" ");
+
+			result += oneByte;
+		}
+
+		return result;
+	}
+
+	CString GetExceptionName(unsigned char code)
+	{
+		switch (code)
+		{
+		case 0x01: return _T("Illegal Function");
+		case 0x02: return _T("Illegal Data Address");
+		case 0x03: return _T("Illegal Data Value");
+		case 0x04: return _T("Slave Device Failure");
+		case 0x05: return _T("Acknowledge");
+		case 0x06: return _T("Slave Device Busy");
+		case 0x08: return _T("Memory Parity Error");
+		case 0x0A: return _T("Gateway Path Unavailable");
+		case 0x0B: return _T("Gateway Target Failed to Respond");
+		default:   return _T("Unknown Exception");
+		}
+	}
+}
+
 #endif
 
 
@@ -55,7 +111,7 @@ BOOL CFrameAnalyzerDlg::OnInitDialog()
 	m_cbProtocol.ResetContent();
 	m_cbProtocol.AddString(_T("Modbus RTU"));
 
-	// Phase 2 / Other protocols
+	// / Other protocols
 	/*
 	m_cbProtocol.AddString(_T("IEC 60870-5-104"));
 	m_cbProtocol.AddString(_T("IEC 60870-5-101"));
@@ -106,155 +162,181 @@ HCURSOR CFrameAnalyzerDlg::OnQueryDragIcon()
 }
 
 //Decode Button 
+
 void CFrameAnalyzerDlg::OnBnClickedBtnDecode()
 {
-	// TODO: Add your control notification handler code here
-	// 1. Pull data from the UI controls into your C++ variables
-	UpdateData(TRUE);
+    UpdateData(TRUE);
 
-	// 2. Safety check: Did the user actually paste anything?
-	if (m_strHexInput.IsEmpty())
-	{
-		m_strOutput = _T("Error: Please paste a hex frame first.");
-		UpdateData(FALSE);
-		return;
-	}
+    if (m_strHexInput.IsEmpty())
+    {
+        m_strOutput = _T("Error: Please enter a hexadecimal frame.");
+        UpdateData(FALSE);
+        return;
+    }
 
-	// Convert the text into our byte array
-	std::vector<unsigned char> parsedBytes = ParseHexInput(m_strHexInput);
+    std::vector<unsigned char> bytes;
+    CString errorMessage;
 
-	// 1. Safety check: A Modbus frame must have at least 4 bytes (Address, Function, CRC, CRC)
-	if (parsedBytes.size() < 4)
-	{
-		m_strOutput = _T("Error: Frame is too short to be valid.");
-		UpdateData(FALSE);
-		return;
-	}
+    if (!TryParseHexInput(m_strHexInput, bytes, errorMessage))
+    {
+        m_strOutput = _T("Hex Input Error\r\n") + errorMessage;
+        UpdateData(FALSE);
+        return;
+    }
 
-	int totalBytes = parsedBytes.size();
+    if (bytes.size() < 4)
+    {
+        m_strOutput = _T("Error: Modbus RTU frame is too short.");
+        UpdateData(FALSE);
+        return;
+    }
 
-	// 1. Extract the Header
-	unsigned char deviceAddress = parsedBytes[0];
-	unsigned char functionCode = parsedBytes[1];
+    const int frameLength = static_cast<int>(bytes.size());
 
-	CString functionName = _T("Unknown Function");
-	bool isException = false;
+    const unsigned char address = bytes[0];
+    const unsigned char functionCode = bytes[1];
 
-	// Check if the highest bit (0x80) is set
-	if (functionCode >= 0x80)
-	{
-		isException = true;
-		// Remove the error flag (subtract 0x80) to find out which function originally failed
-		int originalFunction = functionCode - 0x80;
-		functionName.Format(_T("EXCEPTION on Function %d"), originalFunction);
-	}
-	else
-	{
-		if (functionCode == 3) functionName = _T("Read Holding Registers");
-		else if (functionCode == 6) functionName = _T("Write Single Register");
-	}
+    CString functionName;
 
-	// 2. Extract the CRC that was sent in the frame (the last two bytes)
-	// Modbus sends the Low Byte first, then the High Byte
-	unsigned char receivedCrcLow = parsedBytes[totalBytes - 2];
-	unsigned char receivedCrcHigh = parsedBytes[totalBytes - 1];
+    // Exception responses have the highest bit set in the function code.
+    if ((functionCode & 0x80) != 0)
+    {
+        const unsigned char originalFunction =
+            functionCode & 0x7F;
 
-	// Combine them into a single 16-bit number using bitwise shift (<<) and OR (|)
-	unsigned short receivedCrc = (receivedCrcHigh << 8) | receivedCrcLow;
+        functionName.Format(
+            _T("Exception Response - %s"),
+            GetModbusFunctionName(originalFunction));
+    }
+    else
+    {
+        functionName = GetModbusFunctionName(functionCode);
+    }
 
-	// 3. Calculate what the CRC *should* be (exclude the last 2 bytes from the calculation)
-	unsigned short calculatedCrc = CalculateCRC(parsedBytes, totalBytes - 2);
+    // Payload: bytes after the function code and before the CRC.
+    const CString payload =
+        FormatHexBytes(bytes, 2, frameLength - 4);
 
-	// 4. Compare them for PASS/FAIL
-	CString crcStatus;
-	if (calculatedCrc == receivedCrc) {
-		crcStatus = _T("PASS");
-	}
-	else {
-		// %04X formats the integer as a 4-character uppercase Hex string
-		crcStatus.Format(_T("FAIL (Expected %04X, got %04X)"), calculatedCrc, receivedCrc);
-	}
+    // Modbus RTU transmits the CRC low byte first.
+    const unsigned short receivedCrc =
+        static_cast<unsigned short>(
+            bytes[frameLength - 2] |
+            (static_cast<unsigned short>(
+                bytes[frameLength - 1]) << 8));
 
-	CString payloadInfo = _T("");
+    const unsigned short calculatedCrc =
+        CalculateCRC(bytes, frameLength - 2);
 
-	if (isException && totalBytes >= 5)
-	{
-		// Byte 2 contains the specific error code
-		unsigned char exceptionCode = parsedBytes[2];
-		CString exceptionReason = _T("Unknown Error");
+    const CString crcStatus =
+        (receivedCrc == calculatedCrc)
+        ? _T("PASS")
+        : _T("FAIL");
 
-		if (exceptionCode == 1) exceptionReason = _T("Illegal Function (Device doesn't support this)");
-		if (exceptionCode == 2) exceptionReason = _T("Illegal Data Address (Register doesn't exist)");
-		if (exceptionCode == 3) exceptionReason = _T("Illegal Data Value (Bad data format)");
-		if (exceptionCode == 4) exceptionReason = _T("Slave Device Failure (Device is broken)");
+    CString result;
 
-		payloadInfo.Format(_T("Error Code:      %d - %s\r\n"), exceptionCode, exceptionReason);
-	}
-	else if (functionCode == 3 && totalBytes == 8)
-	{
-		// Extract Starting Register (Byte 2 is High, Byte 3 is Low)
-		unsigned short startAddress = (parsedBytes[2] << 8) | parsedBytes[3];
-		// Extract Quantity to Read (Byte 4 is High, Byte 5 is Low)
-		unsigned short quantity = (parsedBytes[4] << 8) | parsedBytes[5];
+    result.Format(
+        _T("Address       : %u (0x%02X)\r\n")
+        _T("Function Code : %02X - %s\r\n")
+        _T("Frame Length  : %d bytes\r\n")
+        _T("Payload       : %s\r\n\r\n")
+        _T("CRC Received  : 0x%04X\r\n")
+        _T("CRC Calculated: 0x%04X\r\n")
+        _T("CRC Status    : %s"),
+        static_cast<unsigned int>(address),
+        address,
+        functionCode,
+        functionName,
+        frameLength,
+        payload.IsEmpty() ? _T("(empty)") : payload,
+        receivedCrc,
+        calculatedCrc,
+        crcStatus);
 
-		payloadInfo.Format(_T("Start Register:  %d\r\nQuantity:        %d\r\n"), startAddress, quantity);
-	}
-	else if (functionCode == 6 && totalBytes == 8)
-	{
-		// Extract Target Register (Byte 2 is High, Byte 3 is Low)
-		unsigned short registerAddress = (parsedBytes[2] << 8) | parsedBytes[3];
-
-		// Extract Value to Write (Byte 4 is High, Byte 5 is Low)
-		unsigned short writeValue = (parsedBytes[4] << 8) | parsedBytes[5];
-
-		// We print the value in both decimal and HEX, because engineers 
-		// often use specific hex codes (like 0xFF00) to trigger breakers
-		payloadInfo.Format(_T("Target Register: %d\r\nWrite Value:     %d (0x%04X)\r\n"),
-			registerAddress, writeValue, writeValue);
-	}
-	else
-	{
-		payloadInfo = _T("Payload:         (Hex Data Omitted)\r\n");
-	}
-
-	CString result;
-	result.Format(_T("Device Address:  %d\r\nFunction Code:   %d  (%s)\r\n%sCRC Check:       %s"),
-		deviceAddress,
-		functionCode,
-		functionName,
-		payloadInfo,
-		crcStatus);
-
-	m_strOutput = result;
-	UpdateData(FALSE);
-
+    m_strOutput = result;
+    UpdateData(FALSE);
 }
 
-// Parse the input text
-std::vector<unsigned char> CFrameAnalyzerDlg::ParseHexInput(CString input)
+
+
+bool CFrameAnalyzerDlg::TryParseHexInput(
+    const CString& input,
+    std::vector<unsigned char>& frameBytes,
+    CString& errorMessage)
 {
-	std::vector<unsigned char> frameBytes;
+    frameBytes.clear();
+    errorMessage.Empty();
 
-	// 1. Sanitize the input: strip out spaces and newlines
-	input.Replace(_T(" "), _T(""));
-	input.Replace(_T("\r"), _T(""));
-	input.Replace(_T("\n"), _T(""));
+    CString cleaned;
 
-	// 2. Loop through the string two characters at a time
-	for (int i = 0; i < input.GetLength(); i += 2)
-	{
-		// Extract a 2-character chunk
-		CString hexChunk = input.Mid(i, 2);
+    // Remove whitespace but reject every non-hex character.
+    for (int i = 0; i < input.GetLength(); ++i)
+    {
+        const TCHAR ch = input[i];
 
-		// Convert those two hex characters into a real integer (Base 16)
-		long byteValue = _tcstol(hexChunk, nullptr, 16);
+        if (_istspace(ch))
+            continue;
 
-		// Cast to an unsigned char (byte) and add it to our array
-		frameBytes.push_back(static_cast<unsigned char>(byteValue));
-	}
+        if (!_istxdigit(ch))
+        {
+            errorMessage.Format(
+                _T("Invalid character '%c' at input position %d."),
+                ch, i + 1);
 
-	return frameBytes;
+            return false;
+        }
+
+        cleaned += ch;
+    }
+
+    if (cleaned.IsEmpty())
+    {
+        errorMessage = _T("No hexadecimal digits were provided.");
+        return false;
+    }
+
+    if (cleaned.GetLength() % 2 != 0)
+    {
+        errorMessage =
+            _T("Odd number of hexadecimal digits. Each byte needs 2 digits.");
+        return false;
+    }
+
+    for (int i = 0; i < cleaned.GetLength(); i += 2)
+    {
+        const TCHAR high = cleaned[i];
+        const TCHAR low = cleaned[i + 1];
+
+        auto hexValue = [](TCHAR ch) -> int
+            {
+                if (ch >= _T('0') && ch <= _T('9'))
+                    return ch - _T('0');
+
+                if (ch >= _T('A') && ch <= _T('F'))
+                    return ch - _T('A') + 10;
+
+                if (ch >= _T('a') && ch <= _T('f'))
+                    return ch - _T('a') + 10;
+
+                return -1;
+            };
+
+        const int highValue = hexValue(high);
+        const int lowValue = hexValue(low);
+
+        if (highValue < 0 || lowValue < 0)
+        {
+            errorMessage = _T("Invalid hexadecimal byte.");
+            frameBytes.clear();
+            return false;
+        }
+
+        frameBytes.push_back(
+            static_cast<unsigned char>((highValue << 4) | lowValue));
+    }
+
+    return true;
 }
+
 unsigned short CFrameAnalyzerDlg::CalculateCRC(const std::vector<unsigned char>& data, int length)
 {
 	unsigned short crc = 0xFFFF;

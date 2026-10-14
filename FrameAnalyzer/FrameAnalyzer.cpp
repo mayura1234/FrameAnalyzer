@@ -1,6 +1,4 @@
 
-// FrameAnalyzer.cpp : Defines the class behaviors for the application.
-//
 
 #include "pch.h"
 #include "framework.h"
