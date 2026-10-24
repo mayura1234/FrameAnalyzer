@@ -1,56 +1,39 @@
-
 // FrameAnalyzerDlg.h : header file
 //
-
 #pragma once
 
 #include "resource.h"
-#include <vector>
+#include "FrameAnalyzerPage.h"
+#include "FrameBuilderPage.h"
 
 // CFrameAnalyzerDlg dialog
 class CFrameAnalyzerDlg : public CDialogEx
 {
-	// Construction
+// Construction
 public:
-	CFrameAnalyzerDlg(CWnd* pParent = nullptr);	// standard constructor
+    CFrameAnalyzerDlg(CWnd* pParent = nullptr);
 
-	// Dialog Data
+// Dialog Data
 #ifdef AFX_DESIGN_TIME
-	enum { IDD = IDD_FRAMEANALYZER_DIALOG };
+    enum { IDD = IDD_FRAMEANALYZER_DIALOG };
 #endif
 
 protected:
-	virtual void DoDataExchange(CDataExchange* pDX);	// DDX/DDV support
+    virtual void DoDataExchange(CDataExchange* pDX);
+    virtual BOOL OnInitDialog();
 
+    DECLARE_MESSAGE_MAP()
 
-	// Implementation
-protected:
-	HICON m_hIcon;
-
-	// Generated message map functions
-	virtual BOOL OnInitDialog();
-	afx_msg void OnPaint();
-	afx_msg HCURSOR OnQueryDragIcon();
-	DECLARE_MESSAGE_MAP()
-public:
-	// The wizard defined for strings
-	CString m_strHexInput;
-	CString m_strOutput;
-
-	// The wizard for combo box controller 
-	CComboBox m_cbProtocol;
-
-	afx_msg void OnBnClickedBtnDecode();
-
+    afx_msg void OnPaint();
+    afx_msg HCURSOR OnQueryDragIcon();
+    afx_msg void OnSize(UINT nType, int cx, int cy);
+    afx_msg void OnTabSelectionChanged(NMHDR* pNMHDR, LRESULT* pResult);
 
 private:
-	bool TryParseHexInput(
-		const CString& input,
-		std::vector<unsigned char>& frameBytes,
-		CString& errorMessage);
+    void UpdateTabPagesLayout();
 
-	unsigned short CalculateCRC(
-		const std::vector<unsigned char>& data,
-		int length);
-
+    HICON           m_hIcon;
+    CTabCtrl        m_tabMain;
+    CFrameAnalyzerPage  m_analyzerPage;
+    CFrameBuilderPage   m_builderPage;
 };

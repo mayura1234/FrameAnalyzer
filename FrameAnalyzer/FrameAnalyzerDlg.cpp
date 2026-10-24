@@ -1,360 +1,140 @@
-	
+
+
 #include "pch.h"
 #include "framework.h"
 #include "FrameAnalyzer.h"
 #include "FrameAnalyzerDlg.h"
 #include "afxdialogex.h"
-#include "resource.h"
-#include <tchar.h>
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
-
-namespace
-{
-	CString GetModbusFunctionName(unsigned char functionCode)
-	{
-		switch (functionCode)
-		{
-		case 0x01: return _T("Read Coils");
-		case 0x02: return _T("Read Discrete Inputs");
-		case 0x03: return _T("Read Holding Registers");
-		case 0x04: return _T("Read Input Registers");
-		case 0x05: return _T("Write Single Coil");
-		case 0x06: return _T("Write Single Register");
-		case 0x0F: return _T("Write Multiple Coils");
-		case 0x10: return _T("Write Multiple Registers");
-		default:   return _T("Unknown Function");
-		}
-	}
-
-	CString FormatHexBytes(
-		const std::vector<unsigned char>& bytes,
-		int start,
-		int count)
-	{
-		CString result;
-
-		for (int i = 0; i < count; ++i)
-		{
-			CString oneByte;
-			oneByte.Format(_T("%02X"), bytes[start + i]);
-
-			if (!result.IsEmpty())
-				result += _T(" ");
-
-			result += oneByte;
-		}
-
-		return result;
-	}
-
-	CString GetExceptionName(unsigned char code)
-	{
-		switch (code)
-		{
-		case 0x01: return _T("Illegal Function");
-		case 0x02: return _T("Illegal Data Address");
-		case 0x03: return _T("Illegal Data Value");
-		case 0x04: return _T("Slave Device Failure");
-		case 0x05: return _T("Acknowledge");
-		case 0x06: return _T("Slave Device Busy");
-		case 0x08: return _T("Memory Parity Error");
-		case 0x0A: return _T("Gateway Path Unavailable");
-		case 0x0B: return _T("Gateway Target Failed to Respond");
-		default:   return _T("Unknown Exception");
-		}
-	}
-}
-
 #endif
-
 
 // CFrameAnalyzerDlg dialog
 
-
-
 CFrameAnalyzerDlg::CFrameAnalyzerDlg(CWnd* pParent /*=nullptr*/)
-	: CDialogEx(IDD_FRAMEANALYZER_DIALOG, pParent)
+    : CDialogEx(IDD_FRAMEANALYZER_DIALOG, pParent)
 {
-	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
+    m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
 }
 
 void CFrameAnalyzerDlg::DoDataExchange(CDataExchange* pDX)
 {
-	CDialogEx::DoDataExchange(pDX);
-
-	DDX_Text(pDX, IDC_EDIT_HEX_INPUT, m_strHexInput);
-	DDX_Text(pDX, IDC_EDIT_OUTPUT, m_strOutput);
-	DDX_Control(pDX, IDC_COMBO_PROTOCOL, m_cbProtocol);
+    CDialogEx::DoDataExchange(pDX);
+    DDX_Control(pDX, IDC_TAB_MAIN, m_tabMain);
 }
 
 BEGIN_MESSAGE_MAP(CFrameAnalyzerDlg, CDialogEx)
-	ON_WM_PAINT()
-	ON_WM_QUERYDRAGICON()
-	ON_BN_CLICKED(IDC_BTN_DECODE, &CFrameAnalyzerDlg::OnBnClickedBtnDecode)
+    ON_WM_PAINT()
+    ON_WM_QUERYDRAGICON()
+    ON_WM_SIZE()
+    ON_NOTIFY(TCN_SELCHANGE, IDC_TAB_MAIN, &CFrameAnalyzerDlg::OnTabSelectionChanged)
 END_MESSAGE_MAP()
-
 
 // CFrameAnalyzerDlg message handlers
 
 BOOL CFrameAnalyzerDlg::OnInitDialog()
 {
-	CDialogEx::OnInitDialog();
+    CDialogEx::OnInitDialog();
 
-	// Set the icon for this dialog.  The framework does this automatically
-	//  when the application's main window is not a dialog
-	SetIcon(m_hIcon, TRUE);			// Set big icon
-	SetIcon(m_hIcon, FALSE);		// Set small icon
+    SetIcon(m_hIcon, TRUE);
+    SetIcon(m_hIcon, FALSE);
 
-	// --- PROTOCOL INITIALIZATION ---
-	m_cbProtocol.ResetContent();
-	m_cbProtocol.AddString(_T("Modbus RTU"));
+    // Add tab labels
+    m_tabMain.InsertItem(0, _T("Frame Analyzer"));
+    m_tabMain.InsertItem(1, _T("Frame Builder"));
+    m_tabMain.SetCurSel(0);
 
-	// / Other protocols
-	/*
-	m_cbProtocol.AddString(_T("IEC 60870-5-104"));
-	m_cbProtocol.AddString(_T("IEC 60870-5-101"));
-	m_cbProtocol.AddString(_T("DNP3"));
+    // Create child pages as children of the main dialog
+    if (!m_analyzerPage.Create(IDD_FRAME_ANALYZER_PAGE, this))
+    {
+        AfxMessageBox(_T("Failed to create Frame Analyzer page."));
+        return TRUE;
+    }
 
-	*/
+    if (!m_builderPage.Create(IDD_FRAME_BUILDER_PAGE, this))
+    {
+        AfxMessageBox(_T("Failed to create Frame Builder page."));
+        m_analyzerPage.DestroyWindow();
+        return TRUE;
+    }
 
-	// Select the first item in our programmatic list
-	m_cbProtocol.SetCurSel(0);
+    // Position pages inside the tab content area
+    UpdateTabPagesLayout();
 
-	return TRUE;  // return TRUE  unless you set the focus to a control
+    // Place tab control on top in z-order so its header strip is not covered
+    m_tabMain.SetWindowPos(&wndTop, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+
+    // Show first page
+    m_analyzerPage.ShowWindow(SW_SHOW);
+    m_builderPage.ShowWindow(SW_HIDE);
+
+    return TRUE;
 }
 
-// If you add a minimize button to your dialog, you will need the code below
-//  to draw the icon.  For MFC applications using the document/view model,
-//  this is automatically done for you by the framework.
+void CFrameAnalyzerDlg::UpdateTabPagesLayout()
+{
+    if (!::IsWindow(m_tabMain.GetSafeHwnd()))
+        return;
+
+    // Get the full tab control rect in screen coordinates
+    CRect rect;
+    m_tabMain.GetWindowRect(&rect);
+    ScreenToClient(&rect);
+
+    // Shrink rect to exclude the tab header strip
+    m_tabMain.AdjustRect(FALSE, &rect);
+
+    if (::IsWindow(m_analyzerPage.GetSafeHwnd()))
+        m_analyzerPage.MoveWindow(&rect);
+
+    if (::IsWindow(m_builderPage.GetSafeHwnd()))
+        m_builderPage.MoveWindow(&rect);
+}
+
+void CFrameAnalyzerDlg::OnTabSelectionChanged(NMHDR* pNMHDR, LRESULT* pResult)
+{
+    const int sel = m_tabMain.GetCurSel();
+
+    m_analyzerPage.ShowWindow(sel == 0 ? SW_SHOW : SW_HIDE);
+    m_builderPage.ShowWindow(sel == 1 ? SW_SHOW : SW_HIDE);
+
+    *pResult = 0;
+}
+
+void CFrameAnalyzerDlg::OnSize(UINT nType, int cx, int cy)
+{
+    CDialogEx::OnSize(nType, cx, cy);
+    UpdateTabPagesLayout();
+}
 
 void CFrameAnalyzerDlg::OnPaint()
 {
-	if (IsIconic())
-	{
-		CPaintDC dc(this); // device context for painting
-
-		SendMessage(WM_ICONERASEBKGND, reinterpret_cast<WPARAM>(dc.GetSafeHdc()), 0);
-
-		// Center icon in client rectangle
-		int cxIcon = GetSystemMetrics(SM_CXICON);
-		int cyIcon = GetSystemMetrics(SM_CYICON);
-		CRect rect;
-		GetClientRect(&rect);
-		int x = (rect.Width() - cxIcon + 1) / 2;
-		int y = (rect.Height() - cyIcon + 1) / 2;
-
-		// Draw the icon
-		dc.DrawIcon(x, y, m_hIcon);
-	}
-	else
-	{
-		CDialogEx::OnPaint();
-	}
-}
-
-// The system calls this function to obtain the cursor to display while the user drags
-//  the minimized window.
-HCURSOR CFrameAnalyzerDlg::OnQueryDragIcon()
-{
-	return static_cast<HCURSOR>(m_hIcon);
-}
-
-//Decode Button 
-
-void CFrameAnalyzerDlg::OnBnClickedBtnDecode()
-{
-    UpdateData(TRUE);
-
-    if (m_strHexInput.IsEmpty())
+    if (IsIconic())
     {
-        m_strOutput = _T("Error: Please enter a hexadecimal frame.");
-        UpdateData(FALSE);
-        return;
-    }
+        CPaintDC dc(this);
 
-    std::vector<unsigned char> bytes;
-    CString errorMessage;
+        SendMessage(WM_ICONERASEBKGND,
+            reinterpret_cast<WPARAM>(dc.GetSafeHdc()), 0);
 
-    if (!TryParseHexInput(m_strHexInput, bytes, errorMessage))
-    {
-        m_strOutput = _T("Hex Input Error\r\n") + errorMessage;
-        UpdateData(FALSE);
-        return;
-    }
+        const int cxIcon = GetSystemMetrics(SM_CXICON);
+        const int cyIcon = GetSystemMetrics(SM_CYICON);
 
-    if (bytes.size() < 4)
-    {
-        m_strOutput = _T("Error: Modbus RTU frame is too short.");
-        UpdateData(FALSE);
-        return;
-    }
+        CRect rect;
+        GetClientRect(&rect);
 
-    const int frameLength = static_cast<int>(bytes.size());
+        const int x = (rect.Width()  - cxIcon + 1) / 2;
+        const int y = (rect.Height() - cyIcon + 1) / 2;
 
-    const unsigned char address = bytes[0];
-    const unsigned char functionCode = bytes[1];
-
-    CString functionName;
-
-    // Exception responses have the highest bit set in the function code.
-    if ((functionCode & 0x80) != 0)
-    {
-        const unsigned char originalFunction =
-            functionCode & 0x7F;
-
-        functionName.Format(
-            _T("Exception Response - %s"),
-            GetModbusFunctionName(originalFunction));
+        dc.DrawIcon(x, y, m_hIcon);
     }
     else
     {
-        functionName = GetModbusFunctionName(functionCode);
+        CDialogEx::OnPaint();
     }
-
-    // Payload: bytes after the function code and before the CRC.
-    const CString payload =
-        FormatHexBytes(bytes, 2, frameLength - 4);
-
-    // Modbus RTU transmits the CRC low byte first.
-    const unsigned short receivedCrc =
-        static_cast<unsigned short>(
-            bytes[frameLength - 2] |
-            (static_cast<unsigned short>(
-                bytes[frameLength - 1]) << 8));
-
-    const unsigned short calculatedCrc =
-        CalculateCRC(bytes, frameLength - 2);
-
-    const CString crcStatus =
-        (receivedCrc == calculatedCrc)
-        ? _T("PASS")
-        : _T("FAIL");
-
-    CString result;
-
-    result.Format(
-        _T("Address       : %u (0x%02X)\r\n")
-        _T("Function Code : %02X - %s\r\n")
-        _T("Frame Length  : %d bytes\r\n")
-        _T("Payload       : %s\r\n\r\n")
-        _T("CRC Received  : 0x%04X\r\n")
-        _T("CRC Calculated: 0x%04X\r\n")
-        _T("CRC Status    : %s"),
-        static_cast<unsigned int>(address),
-        address,
-        functionCode,
-        functionName,
-        frameLength,
-        payload.IsEmpty() ? _T("(empty)") : payload,
-        receivedCrc,
-        calculatedCrc,
-        crcStatus);
-
-    m_strOutput = result;
-    UpdateData(FALSE);
 }
 
-
-
-bool CFrameAnalyzerDlg::TryParseHexInput(
-    const CString& input,
-    std::vector<unsigned char>& frameBytes,
-    CString& errorMessage)
+HCURSOR CFrameAnalyzerDlg::OnQueryDragIcon()
 {
-    frameBytes.clear();
-    errorMessage.Empty();
-
-    CString cleaned;
-
-    // Remove whitespace but reject every non-hex character.
-    for (int i = 0; i < input.GetLength(); ++i)
-    {
-        const TCHAR ch = input[i];
-
-        if (_istspace(ch))
-            continue;
-
-        if (!_istxdigit(ch))
-        {
-            errorMessage.Format(
-                _T("Invalid character '%c' at input position %d."),
-                ch, i + 1);
-
-            return false;
-        }
-
-        cleaned += ch;
-    }
-
-    if (cleaned.IsEmpty())
-    {
-        errorMessage = _T("No hexadecimal digits were provided.");
-        return false;
-    }
-
-    if (cleaned.GetLength() % 2 != 0)
-    {
-        errorMessage =
-            _T("Odd number of hexadecimal digits. Each byte needs 2 digits.");
-        return false;
-    }
-
-    for (int i = 0; i < cleaned.GetLength(); i += 2)
-    {
-        const TCHAR high = cleaned[i];
-        const TCHAR low = cleaned[i + 1];
-
-        auto hexValue = [](TCHAR ch) -> int
-            {
-                if (ch >= _T('0') && ch <= _T('9'))
-                    return ch - _T('0');
-
-                if (ch >= _T('A') && ch <= _T('F'))
-                    return ch - _T('A') + 10;
-
-                if (ch >= _T('a') && ch <= _T('f'))
-                    return ch - _T('a') + 10;
-
-                return -1;
-            };
-
-        const int highValue = hexValue(high);
-        const int lowValue = hexValue(low);
-
-        if (highValue < 0 || lowValue < 0)
-        {
-            errorMessage = _T("Invalid hexadecimal byte.");
-            frameBytes.clear();
-            return false;
-        }
-
-        frameBytes.push_back(
-            static_cast<unsigned char>((highValue << 4) | lowValue));
-    }
-
-    return true;
-}
-
-unsigned short CFrameAnalyzerDlg::CalculateCRC(const std::vector<unsigned char>& data, int length)
-{
-	unsigned short crc = 0xFFFF;
-
-	for (int pos = 0; pos < length; pos++)
-	{
-		crc ^= (unsigned short)data[pos];
-
-		for (int i = 8; i != 0; i--)
-		{
-			if ((crc & 0x0001) != 0) {
-				crc >>= 1;
-				crc ^= 0xA001;
-			}
-			else {
-				crc >>= 1;
-			}
-		}
-	}
-	return crc;
+    return static_cast<HCURSOR>(m_hIcon);
 }
