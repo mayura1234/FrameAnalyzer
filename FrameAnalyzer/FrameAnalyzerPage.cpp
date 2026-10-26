@@ -26,6 +26,26 @@ namespace
         default:   return _T("Unknown Function");
         }
     }
+    CString GetFunctionDescription(unsigned char functionCode)
+    {
+        CString functionName;
+
+        if ((functionCode & 0x80) != 0)
+        {
+            CString originalName =
+                GetModbusFunctionName(functionCode & 0x7F);
+
+            functionName.Format(
+                _T("Exception Response - %s"),
+                originalName);
+        }
+        else
+        {
+            functionName = GetModbusFunctionName(functionCode);
+        }
+
+        return functionName;
+    }
 
     CString FormatHexBytes(
         const std::vector<unsigned char>& bytes,
@@ -46,6 +66,15 @@ namespace
         }
 
         return result;
+    }
+
+    unsigned int ReadUInt16BE(
+        const std::vector<unsigned char>& bytes,
+        int offset)
+    {
+        return
+            (static_cast<unsigned int>(bytes[offset]) << 8) |
+            static_cast<unsigned int>(bytes[offset + 1]);
     }
 }
 
@@ -75,10 +104,9 @@ BOOL CFrameAnalyzerPage::OnInitDialog()
 
     m_cbProtocol.ResetContent();
     m_cbProtocol.AddString(_T("Modbus RTU"));
-
-    // Add further supported protocols here in the future.
-    // m_cbProtocol.AddString(_T("Modbus TCP"));
-    // m_cbProtocol.AddString(_T("Modbus ASCII"));
+    m_cbProtocol.AddString(_T("Modbus ASCII"));
+    m_cbProtocol.AddString(_T("Modbus TCP"));
+     
     // m_cbProtocol.AddString(_T("IEC 60870-5-101"));
     // m_cbProtocol.AddString(_T("IEC 60870-5-104"));
     // m_cbProtocol.AddString(_T("DNP3"));
@@ -101,22 +129,73 @@ void CFrameAnalyzerPage::OnBnClickedBtnDecode()
         return;
     }
 
-    std::vector<unsigned char> bytes;
-    CString errorMessage;
+    const int selectedProtocol = m_cbProtocol.GetCurSel();
 
-    if (!TryParseHexInput(m_strHexInput, bytes, errorMessage))
+    if (selectedProtocol == CB_ERR)
     {
-        m_strOutput = _T("Hex Input Error\r\n") + errorMessage;
+        m_strOutput =
+            _T("Error: Please select a protocol.");
+
         UpdateData(FALSE);
         return;
     }
 
+    CString result;
+    CString errorMessage;
+    std::vector<unsigned char> bytes;
+
+
+    switch (selectedProtocol)
+    {
+    case 0: // Modbus RTU
+    {
+        if (!TryParseHexInput(m_strHexInput, bytes, errorMessage))
+        {
+            result = _T("Hex Input Error\r\n") + errorMessage;
+            break;
+        }
+
+        DecodeModbusRTU(bytes, result);
+        break;
+    }
+
+    case 1: // Modbus ASCII
+    {
+        DecodeModbusASCII(m_strHexInput, result);
+        break;
+    }
+
+    case 2: // Modbus TCP
+    {
+        if (!TryParseHexInput(m_strHexInput, bytes, errorMessage))
+        {
+            result = _T("Hex Input Error\r\n") + errorMessage;
+            break;
+        }
+
+        DecodeModbusTCP(bytes, result);
+        break;
+    }
+
+    default:
+        result = _T("Error: Unsupported protocol selection.");
+        break;
+    }
+
+    m_strOutput = result;
+    UpdateData(FALSE);
+}
+
+void CFrameAnalyzerPage::DecodeModbusRTU(
+    const std::vector<unsigned char>& bytes,
+    CString& result)
+{
     if (bytes.size() < 4)
     {
-        m_strOutput =
-            _T("Error: Modbus RTU frame is too short.");
+        result =
+            _T("Modbus RTU Error\r\n")
+            _T("The frame is too short. At least 4 bytes are required.");
 
-        UpdateData(FALSE);
         return;
     }
 
@@ -125,24 +204,9 @@ void CFrameAnalyzerPage::OnBnClickedBtnDecode()
     const unsigned char address = bytes[0];
     const unsigned char functionCode = bytes[1];
 
-    CString functionName;
+    const CString functionName =
+        GetFunctionDescription(functionCode);
 
-    // Exception responses have the highest bit set.
-    if ((functionCode & 0x80) != 0)
-    {
-        const unsigned char originalFunction =
-            functionCode & 0x7F;
-
-        functionName.Format(
-            _T("Exception Response - %s"),
-            GetModbusFunctionName(originalFunction));
-    }
-    else
-    {
-        functionName = GetModbusFunctionName(functionCode);
-    }
-
-    // Bytes after the function code and before the CRC.
     const CString payload =
         FormatHexBytes(bytes, 2, frameLength - 4);
 
@@ -161,10 +225,7 @@ void CFrameAnalyzerPage::OnBnClickedBtnDecode()
         ? _T("PASS")
         : _T("FAIL");
 
-    CString result;
-
     result.Format(
-        _T("\r\n\r\n")
         _T("Address       : %u (0x%02X)\r\n")
         _T("Function Code : %02X - %s\r\n")
         _T("Frame Length  : %d bytes\r\n")
@@ -181,9 +242,198 @@ void CFrameAnalyzerPage::OnBnClickedBtnDecode()
         receivedCrc,
         calculatedCrc,
         crcStatus);
+}
 
-    m_strOutput = result;
-    UpdateData(FALSE);
+void CFrameAnalyzerPage::DecodeModbusASCII(
+    const CString& input,
+    CString& result)
+{
+    CString frame = input;
+    frame.Trim();
+
+    if (frame.IsEmpty() || frame[0] != _T(':'))
+    {
+        result =
+            _T("Modbus ASCII Error\r\n")
+            _T("The frame must begin with a colon (:).\r\n\r\n")
+            _T("Example:\r\n")
+            _T(":010300100002EA");
+
+        return;
+    }
+
+    // Remove the start delimiter before converting ASCII hex pairs.
+    CString hexContent = frame.Mid(1);
+
+    // The input control may contain a trailing CR/LF. Trim() above
+    // removes it. Whitespace within the frame is not permitted.
+    for (int i = 0; i < hexContent.GetLength(); ++i)
+    {
+        if (_istspace(hexContent[i]))
+        {
+            result =
+                _T("Modbus ASCII Error\r\n")
+                _T("Whitespace is not permitted inside the ASCII frame.");
+
+            return;
+        }
+    }
+
+    if (hexContent.IsEmpty() || hexContent.GetLength() % 2 != 0)
+    {
+        result =
+            _T("Modbus ASCII Error\r\n")
+            _T("The characters after ':' must form complete hex byte pairs.");
+
+        return;
+    }
+
+    std::vector<unsigned char> bytes;
+    CString parseError;
+
+    if (!TryParseHexInput(hexContent, bytes, parseError))
+    {
+        result = _T("Modbus ASCII Hex Error\r\n") + parseError;
+        return;
+    }
+
+    // Address + function code + LRC is the minimum frame content.
+    if (bytes.size() < 3)
+    {
+        result =
+            _T("Modbus ASCII Error\r\n")
+            _T("The frame is too short. Address, function code and LRC are required.");
+
+        return;
+    }
+
+    const int byteCount = static_cast<int>(bytes.size());
+
+    const unsigned char address = bytes[0];
+    const unsigned char functionCode = bytes[1];
+    const CString functionName = GetFunctionDescription(functionCode);
+
+    const CString payload =
+        FormatHexBytes(bytes, 2, byteCount - 3);
+
+    const unsigned char receivedLrc = bytes[byteCount - 1];
+    const unsigned char calculatedLrc =
+        CalculateLRC(bytes, byteCount - 1);
+
+    const CString lrcStatus =
+        (receivedLrc == calculatedLrc)
+        ? _T("PASS")
+        : _T("FAIL");
+
+    result.Format(
+        _T("Start Delimiter: :\r\n")
+        _T("Address        : %u (0x%02X)\r\n")
+        _T("Function Code  : %02X - %s\r\n")
+        _T("Frame Data     : %d bytes (decoded)\r\n")
+        _T("Payload        : %s\r\n\r\n")
+        _T("LRC Received   : 0x%02X\r\n")
+        _T("LRC Calculated : 0x%02X\r\n")
+        _T("LRC Status     : %s\r\n")
+        _T("Frame Terminator: Not supplied or not verified"),
+        static_cast<unsigned int>(address),
+        address,
+        functionCode,
+        functionName,
+        byteCount,
+        payload.IsEmpty() ? _T("(empty)") : payload,
+        receivedLrc,
+        calculatedLrc,
+        lrcStatus);
+}
+
+void CFrameAnalyzerPage::DecodeModbusTCP(
+    const std::vector<unsigned char>& bytes,
+    CString& result)
+{
+    // MBAP header is 7 bytes, followed by at least a function code.
+    if (bytes.size() < 8)
+    {
+        result =
+            _T("Modbus TCP Error\r\n")
+            _T("The frame is too short. A complete MBAP header and function code are required.");
+
+        return;
+    }
+
+    const unsigned int transactionId = ReadUInt16BE(bytes, 0);
+    const unsigned int protocolId = ReadUInt16BE(bytes, 2);
+    const unsigned int declaredLength = ReadUInt16BE(bytes, 4);
+    const unsigned char unitId = bytes[6];
+
+    // Length counts the Unit ID and the PDU, not the whole frame.
+    const unsigned int expectedFrameLength = 6 + declaredLength;
+    const unsigned int actualFrameLength =
+        static_cast<unsigned int>(bytes.size());
+
+    if (protocolId != 0)
+    {
+        result.Format(
+            _T("Modbus TCP Error\r\n")
+            _T("Invalid Protocol ID: 0x%04X. Modbus TCP requires 0x0000."),
+            protocolId);
+
+        return;
+    }
+
+    if (declaredLength < 2)
+    {
+        result =
+            _T("Modbus TCP Error\r\n")
+            _T("The MBAP Length must include at least the Unit ID and function code.");
+
+        return;
+    }
+
+    if (expectedFrameLength != actualFrameLength)
+    {
+        result.Format(
+            _T("Modbus TCP Error\r\n")
+            _T("MBAP length mismatch.\r\n")
+            _T("Length field       : %u bytes after the first 6 bytes\r\n")
+            _T("Expected frame size: %u bytes\r\n")
+            _T("Actual frame size  : %u bytes"),
+            declaredLength,
+            expectedFrameLength,
+            actualFrameLength);
+
+        return;
+    }
+
+    const unsigned char functionCode = bytes[7];
+    const CString functionName = GetFunctionDescription(functionCode);
+
+    const CString payload =
+        FormatHexBytes(
+            bytes,
+            8,
+            static_cast<int>(bytes.size()) - 8);
+
+    result.Format(
+        _T("Transaction ID : %u (0x%04X)\r\n")
+        _T("Protocol ID    : %u (0x%04X)\r\n")
+        _T("MBAP Length    : %u bytes\r\n")
+        _T("Unit ID        : %u (0x%02X)\r\n")
+        _T("Function Code  : %02X - %s\r\n")
+        _T("Frame Length   : %u bytes\r\n")
+        _T("PDU Payload    : %s\r\n\r\n")
+        _T("MBAP Status    : PASS\r\n")
+        _T("Checksum       : Not present in Modbus TCP"),
+        transactionId,
+        transactionId,
+        protocolId,
+        protocolId,
+        declaredLength,
+        static_cast<unsigned int>(unitId),
+        unitId,
+        functionCode,
+        functionName,
+        actualFrameLength,
+        payload.IsEmpty() ? _T("(empty)") : payload);
 }
 
 bool CFrameAnalyzerPage::TryParseHexInput(
@@ -290,4 +540,18 @@ unsigned short CFrameAnalyzerPage::CalculateCRC(
     }
 
     return crc;
+}
+
+unsigned char CFrameAnalyzerPage::CalculateLRC(
+    const std::vector<unsigned char>& data,
+    int length)
+{
+    unsigned int sum = 0;
+
+    for (int i = 0; i < length; ++i)
+        sum += data[i];
+
+    // LRC is the two's complement of the low 8 bits of the sum.
+    return static_cast<unsigned char>(
+        (0x100 - (sum & 0xFF)) & 0xFF);
 }

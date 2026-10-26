@@ -36,4 +36,20 @@ private:
     unsigned short CalculateCRC(
         const std::vector<unsigned char>& data,
         int length);
+
+    unsigned char CalculateLRC(
+        const std::vector<unsigned char>& data,
+        int length);
+
+    void DecodeModbusRTU(
+        const std::vector<unsigned char>& bytes,
+        CString& result);
+
+    void DecodeModbusASCII(
+        const CString& input,
+        CString& result);
+
+    void DecodeModbusTCP(
+        const std::vector<unsigned char>& bytes,
+        CString& result);
 };
