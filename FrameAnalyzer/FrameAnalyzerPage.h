@@ -52,4 +52,6 @@ private:
     void DecodeModbusTCP(
         const std::vector<unsigned char>& bytes,
         CString& result);
+
+
 };

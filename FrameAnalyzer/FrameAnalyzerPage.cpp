@@ -244,107 +244,154 @@ void CFrameAnalyzerPage::DecodeModbusRTU(
         crcStatus);
 }
 
+
 void CFrameAnalyzerPage::DecodeModbusASCII(
     const CString& input,
     CString& result)
 {
+    // 1. Copy the input without automatically removing CR/LF.
     CString frame = input;
-    frame.Trim();
 
-    if (frame.IsEmpty() || frame[0] != _T(':'))
+    // Remove leading spaces and tabs.
+    while (!frame.IsEmpty() &&
+        (frame[0] == _T(' ') || frame[0] == _T('\t')))
     {
-        result =
-            _T("Modbus ASCII Error\r\n")
-            _T("The frame must begin with a colon (:).\r\n\r\n")
-            _T("Example:\r\n")
-            _T(":010300100002EA");
-
-        return;
+        frame.Delete(0, 1);
     }
 
-    // Remove the start delimiter before converting ASCII hex pairs.
-    CString hexContent = frame.Mid(1);
-
-    // The input control may contain a trailing CR/LF. Trim() above
-    // removes it. Whitespace within the frame is not permitted.
-    for (int i = 0; i < hexContent.GetLength(); ++i)
+    // Remove trailing spaces and tabs.
+    while (!frame.IsEmpty())
     {
-        if (_istspace(hexContent[i]))
-        {
-            result =
-                _T("Modbus ASCII Error\r\n")
-                _T("Whitespace is not permitted inside the ASCII frame.");
+        int last = frame.GetLength() - 1;
+        TCHAR ch = frame[last];
 
-            return;
+        if (ch == _T(' ') || ch == _T('\t'))
+        {
+            frame.Delete(last, 1);
+        }
+        else
+        {
+            break;
         }
     }
 
-    if (hexContent.IsEmpty() || hexContent.GetLength() % 2 != 0)
+    // 2. CR/LF is optional for pasted offline frames.
+    bool terminatorPresent = false;
+
+    if (frame.GetLength() >= 2 &&
+        frame.Right(2) == _T("\r\n"))
+    {
+        // Remove a valid CR/LF terminator.
+        frame = frame.Left(frame.GetLength() - 2);
+        terminatorPresent = true;
+    }
+    else if (frame.Find(_T('\r')) != -1 ||
+        frame.Find(_T('\n')) != -1)
     {
         result =
-            _T("Modbus ASCII Error\r\n")
-            _T("The characters after ':' must form complete hex byte pairs.");
+            _T("Invalid Modbus ASCII frame.\r\n")
+            _T("If a terminator is supplied, it must be CR/LF.");
 
         return;
     }
 
+    // 3. Validate the starting colon.
+    if (frame.IsEmpty() || frame[0] != _T(':'))
+    {
+        result =
+            _T("Invalid Modbus ASCII frame.\r\n")
+            _T("Missing start character ':'.");
+        return;
+    }
+
+    // 4. Extract hexadecimal content after ':'.
+    CString hexContent = frame.Mid(1);
+
+    if (hexContent.IsEmpty())
+    {
+        result =
+            _T("Invalid Modbus ASCII frame.\r\n")
+            _T("No hexadecimal data was supplied.");
+        return;
+    }
+
+    // Each byte requires exactly two hexadecimal characters.
+    if ((hexContent.GetLength() % 2) != 0)
+    {
+        result =
+            _T("Invalid Modbus ASCII frame.\r\n")
+            _T("Hexadecimal content must contain complete byte pairs.");
+        return;
+    }
+
+    // 5. Convert hexadecimal text into bytes.
     std::vector<unsigned char> bytes;
     CString parseError;
 
     if (!TryParseHexInput(hexContent, bytes, parseError))
     {
-        result = _T("Modbus ASCII Hex Error\r\n") + parseError;
+        result =
+            _T("Invalid Modbus ASCII hexadecimal data.\r\n") +
+            parseError;
         return;
     }
 
-    // Address + function code + LRC is the minimum frame content.
+    // Minimum frame: address + function code + LRC.
     if (bytes.size() < 3)
     {
         result =
-            _T("Modbus ASCII Error\r\n")
-            _T("The frame is too short. Address, function code and LRC are required.");
-
+            _T("Invalid Modbus ASCII frame.\r\n")
+            _T("At least address, function code, and LRC are required.");
         return;
     }
 
-    const int byteCount = static_cast<int>(bytes.size());
+    // 6. Extract the frame fields.
+    unsigned char address = bytes[0];
+    unsigned char functionCode = bytes[1];
 
-    const unsigned char address = bytes[0];
-    const unsigned char functionCode = bytes[1];
-    const CString functionName = GetFunctionDescription(functionCode);
+    int byteCount = static_cast<int>(bytes.size());
 
-    const CString payload =
-        FormatHexBytes(bytes, 2, byteCount - 3);
+    // Exclude address, function code, and LRC from the payload.
+    CString payload = FormatHexBytes(
+        bytes, 2, byteCount - 3);
 
-    const unsigned char receivedLrc = bytes[byteCount - 1];
-    const unsigned char calculatedLrc =
-        CalculateLRC(bytes, byteCount - 1);
+    // Last byte is the received LRC.
+    unsigned char receivedLRC = bytes[byteCount - 1];
 
-    const CString lrcStatus =
-        (receivedLrc == calculatedLrc)
-        ? _T("PASS")
-        : _T("FAIL");
+    // Calculate LRC over every byte except the received LRC.
+    unsigned char calculatedLRC = CalculateLRC(
+        bytes, byteCount - 1);
 
+    bool lrcValid = (receivedLRC == calculatedLRC);
+
+    // 7. Describe the optional terminator.
+    CString terminatorStatus = terminatorPresent
+        ? _T("CR/LF supplied and valid")
+        : _T("Not supplied (optional for pasted input)");
+
+    // 8. Build the decode report.
     result.Format(
-        _T("Start Delimiter: :\r\n")
-        _T("Address        : %u (0x%02X)\r\n")
-        _T("Function Code  : %02X - %s\r\n")
-        _T("Frame Data     : %d bytes (decoded)\r\n")
-        _T("Payload        : %s\r\n\r\n")
-        _T("LRC Received   : 0x%02X\r\n")
-        _T("LRC Calculated : 0x%02X\r\n")
-        _T("LRC Status     : %s\r\n")
-        _T("Frame Terminator: Not supplied or not verified"),
-        static_cast<unsigned int>(address),
+        _T("Address: 0x%02X (%u)\r\n")
+        _T("Function Code: 0x%02X\r\n")
+        _T("Function: %s\r\n")
+        _T("Payload: %s\r\n\r\n")
+        _T("LRC Received: 0x%02X\r\n")
+        _T("LRC Calculated: 0x%02X\r\n")
+        _T("LRC Status: %s\r\n")
+        _T("Frame Terminator: %s\r\n")
+        _T("Overall Status: %s"),
+        address,
         address,
         functionCode,
-        functionName,
-        byteCount,
-        payload.IsEmpty() ? _T("(empty)") : payload,
-        receivedLrc,
-        calculatedLrc,
-        lrcStatus);
+        GetFunctionDescription(functionCode),
+        payload.GetString(),
+        receivedLRC,
+        calculatedLRC,
+        lrcValid ? _T("PASS") : _T("FAIL"),
+        terminatorStatus.GetString(),
+        lrcValid ? _T("PASS") : _T("FAIL"));
 }
+
 
 void CFrameAnalyzerPage::DecodeModbusTCP(
     const std::vector<unsigned char>& bytes,
